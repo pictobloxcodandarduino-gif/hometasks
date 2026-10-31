@@ -2,7 +2,6 @@ import os
 import hmac
 import hashlib
 import secrets
-import time
 import streamlit as st
 from supabase import create_client, Client
 from streamlit_autorefresh import st_autorefresh
@@ -141,15 +140,6 @@ def complete_task(sb: Client, task: str, person: str):
     result = sb.rpc("complete_task", {"p_task": task, "p_person": person}).execute()
     return result.data
 
-def increment_task_seconds(sb: Client, task: str, person: str, seconds: int):
-    if seconds <= 0:
-        return
-    result = sb.rpc(
-        "increment_task_seconds",
-        {"p_task": task, "p_person": person, "p_seconds": seconds},
-    ).execute()
-    return result.data
-
 def reset_all(sb: Client):
     sb.rpc("reset_all_tasks").execute()
 
@@ -216,11 +206,11 @@ with st.sidebar:
             st.error("رمز فعلی صحیح نیست.")
 
 # Poll shared database every 5 seconds so other devices see changes automatically.
-st_autorefresh(interval=1000, key="shared_state_refresh")
+st_autorefresh(interval=5000, key="shared_state_refresh")
 
 st.markdown("---")
 st.markdown("### 📋 کارها و انتخاب افراد")
-st.caption("تیک هر شخص را روشن نگه دار؛ به ازای هر ثانیه، شمارنده همان شخص برای آن کار یک واحد زیاد می‌شود. خاموش کردن تیک، شمارش را متوقف می‌کند.")
+st.caption("برای هر کار می‌توانی تیک هر شخصی را جداگانه بزنی. با ثبت تیک، شمارنده همان شخص در همان کار یکی زیاد می‌شود و نوبتش به انتهای صف می‌رود.")
 
 try:
     orders = get_orders(supabase)
@@ -244,29 +234,15 @@ for idx, (task, emoji) in enumerate(TASKS.items()):
             for person in PEOPLE:
                 count = int(task_counts.get(person, 0))
                 checkbox_key = f"check_{task}_{person}"
-                is_running = st.checkbox(
-                    f"{person}  ·  انجام‌شده: {count} ثانیه",
-                    key=checkbox_key,
-                )
-                timer_key = f"timer_last_tick_{task}_{person}"
-                if is_running:
-                    now = time.time()
-                    last_tick = st.session_state.get(timer_key)
-                    if last_tick is None:
-                        # شروع تایمر فقط زمان را ثبت می‌کند؛ شمارش از ثانیه بعد آغاز می‌شود.
-                        st.session_state[timer_key] = now
-                    else:
-                        elapsed_seconds = int(now - last_tick)
-                        if elapsed_seconds >= 1:
-                            try:
-                                increment_task_seconds(
-                                    supabase, task, person, elapsed_seconds
-                                )
-                                st.session_state[timer_key] = last_tick + elapsed_seconds
-                            except Exception as e:
-                                st.error(f"ثبت زمان انجام نشد: {e}")
-                else:
-                    st.session_state.pop(timer_key, None)
+                if st.checkbox(f"{person}  ·  انجام‌شده: {count} بار", key=checkbox_key):
+                    try:
+                        complete_task(supabase, task, person)
+                        st.session_state[checkbox_key] = False
+                        st.toast(f"یک مورد {task} برای {person} ثبت شد", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state[checkbox_key] = False
+                        st.error(f"ثبت تغییر انجام نشد: {e}")
 
 st.markdown("---")
 left, right = st.columns([2, 1])
