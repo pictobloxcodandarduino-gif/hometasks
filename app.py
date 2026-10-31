@@ -136,12 +136,18 @@ def change_password(sb: Client, old_password: str, new_password: str):
     }).eq("id", ADMIN_ID).execute()
     return True
 
-def complete_task(sb: Client, task: str):
-    result = sb.rpc("complete_task", {"p_task": task}).execute()
+def complete_task(sb: Client, task: str, person: str):
+    result = sb.rpc("complete_task", {"p_task": task, "p_person": person}).execute()
     return result.data
 
 def reset_all(sb: Client):
     sb.rpc("reset_all_tasks").execute()
+
+def get_completion_counts(sb: Client):
+    rows = sb.table("task_state").select("completion_counts").eq("id", STATE_ID).limit(1).execute().data
+    if not rows:
+        raise RuntimeError("آمار کارها پیدا نشد. فایل update_for_individual_checkmarks.sql را در Supabase اجرا کنید.")
+    return rows[0].get("completion_counts") or {}
 
 # -------------------- App --------------------
 st.markdown("<h1 style='text-align:center'>🏠 مدیریت کارهای خانه</h1>", unsafe_allow_html=True)
@@ -203,11 +209,12 @@ with st.sidebar:
 st_autorefresh(interval=5000, key="shared_state_refresh")
 
 st.markdown("---")
-st.markdown("### 📋 نوبت کارها")
-st.caption("با زدن دکمه «انجام شد»، نام آن شخص در همان کار به انتهای صف منتقل می‌شود.")
+st.markdown("### 📋 کارها و انتخاب افراد")
+st.caption("برای هر کار می‌توانی تیک هر شخصی را جداگانه بزنی. با ثبت تیک، شمارنده همان شخص در همان کار یکی زیاد می‌شود و نوبتش به انتهای صف می‌رود.")
 
 try:
     orders = get_orders(supabase)
+    completion_counts = get_completion_counts(supabase)
 except Exception as e:
     st.error(f"خواندن اطلاعات ممکن نشد: {e}")
     st.stop()
@@ -218,26 +225,24 @@ for idx, (task, emoji) in enumerate(TASKS.items()):
         with st.container(border=True):
             st.subheader(f"{emoji} {task}")
             current_order = orders.get(task, PEOPLE)
+            task_counts = completion_counts.get(task, {})
+            st.markdown("**ترتیب فعلی نوبت‌ها**")
             for rank, person in enumerate(current_order, start=1):
-                if rank == 1:
-                    st.success(f"🥇  {rank} ـ {person}")
-                elif rank == 2:
-                    st.warning(f"🥈  {rank} ـ {person}")
-                else:
-                    st.info(f"🥉  {rank} ـ {person}")
-            current_person = current_order[0]
-            if st.button(
-                f"✓ انجام شد: {current_person}",
-                key=f"done_{task}",
-                use_container_width=True,
-                type="primary",
-            ):
-                try:
-                    complete_task(supabase, task)
-                    st.toast(f"نوبت {task} به‌روزرسانی شد", icon="✅")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"ثبت تغییر انجام نشد: {e}")
+                medal = ["🥇", "🥈", "🥉"][rank - 1]
+                st.write(f"{medal} {rank}. {person}")
+            st.markdown("**ثبت انجام کار و تعداد دفعات**")
+            for person in PEOPLE:
+                count = int(task_counts.get(person, 0))
+                checkbox_key = f"check_{task}_{person}"
+                if st.checkbox(f"{person}  ·  انجام‌شده: {count} بار", key=checkbox_key):
+                    try:
+                        complete_task(supabase, task, person)
+                        st.session_state[checkbox_key] = False
+                        st.toast(f"یک مورد {task} برای {person} ثبت شد", icon="✅")
+                        st.rerun()
+                    except Exception as e:
+                        st.session_state[checkbox_key] = False
+                        st.error(f"ثبت تغییر انجام نشد: {e}")
 
 st.markdown("---")
 left, right = st.columns([2, 1])
@@ -248,12 +253,12 @@ with right:
         st.rerun()
 
 with st.expander("⚠️ بازنشانی همه نوبت‌ها"):
-    st.warning("با این کار ترتیب تمام کارها به هانی، احمرضا، ارمیا برمی‌گردد.")
+    st.warning("با این کار ترتیب نوبت‌ها به حالت اول برمی‌گردد و شمارنده تمام افراد برای همه کارها صفر می‌شود.")
     confirm_reset = st.checkbox("بازنشانی همه شش کار را تأیید می‌کنم")
     if st.button("بازنشانی نوبت‌ها", disabled=not confirm_reset):
         try:
             reset_all(supabase)
-            st.success("همه نوبت‌ها بازنشانی شدند.")
+            st.success("نوبت‌ها بازنشانی شدند و شمارنده‌ها صفر شدند.")
             st.rerun()
         except Exception as e:
             st.error(f"بازنشانی انجام نشد: {e}")
